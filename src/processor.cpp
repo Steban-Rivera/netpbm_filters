@@ -1,63 +1,130 @@
 #include <iostream>
+#include <vector>
+#include <string>
 
-#define MAX_FILENAME 256
-#define BUFFER_SIZE 1024
+class Image {
+private:
+    std::string magic;
+    int width;
+    int height;
+    int maxColor;
+    int channels;
+    std::vector<int> pixels;
 
-int main(int argc, char* argv[]) {
+    void skipComments() {
+        char c;
 
-  char buffer[BUFFER_SIZE];
-  char magic[3];
-  int width;
-  int height;
-  int max_color;
-  int *pixels;
+        while (std::cin >> std::ws && std::cin.peek() == '#') {
+            std::string comment;
+            std::getline(std::cin, comment);
+        }
+    }
 
-  if(argc<2){
-    std::cout << "missing input and output paths\n";
-    std::cout << "usage:" << argv[0] << " input_image.pgm output_image.pgm" << std::endl;
-    std::cout << "or "<< argv[0] << "input_image.ppm output_image.ppm" << std::endl;
-    return 1;
-  }
-  // abrir archivo
-  FILE *file = fopen(argv[1], "r");
-  if (file == NULL) {
-    std::cout << "Error, incorrect path or incorrect file."<< std::endl;
-    return 1;
-  }
-  // Leer y mostrar línea por línea
-  fscanf(file, "%2s", magic);  // magic number
-  fscanf(file, "%d %d", &width, &height);
-  fscanf(file, "%d", &max_color);
+    bool readToken(std::string& token) {
+        skipComments();
 
-  int pixel_count = width * height;
-  if (strcmp(magic, "P3") != 0){
-    int pixel_count = width * height * 3;
-  }
+        if (!(std::cin >> token)) {
+            return false;
+        }
 
-  pixels = (int *) malloc(pixel_count);
-  int value;
+        return true;
+    }
 
-  for (int i = 0; i < pixel_count; i++) {
-      if (fscanf(file, "%d", &value) != 1) {
-        std::cout << "Error reading pixels."<< std::endl;
-        free(pixels);
-        fclose(file);
-        return 0;
-      }
-      pixels[i] = value;
-  }
-  fclose(file);
+public:
+    Image()
+        : width(0),
+          height(0),
+          maxColor(0),
+          channels(0) {
+    }
 
-  FILE * output = fopen(argv[2], "w");
-  (void) fprintf(output, "%s\n%d %d\n%d\n", magic, width, height, max_color);
-  for (int i = 0; i < pixel_count; i++) {
-    fprintf(output, "%d\n", pixels[i]);
-  }
-  (void) fclose(output);
-  return 0;
+    bool read() {
+        std::string token;
 
+        if (!readToken(magic)) {
+            return false;
+        }
 
-  
-  
+        if (magic == "P2") {
+            channels = 1;
+        } else if (magic == "P3") {
+            channels = 3;
+        } else {
+            std::cerr << "Error: formato no soportado. Use P2 o P3." << std::endl;
+            return false;
+        }
 
+        if (!readToken(token)) {
+            return false;
+        }
+        width = std::stoi(token);
+
+        if (!readToken(token)) {
+            return false;
+        }
+        height = std::stoi(token);
+
+        if (!readToken(token)) {
+            return false;
+        }
+        maxColor = std::stoi(token);
+
+        if (width <= 0 || height <= 0 || maxColor <= 0) {
+            std::cerr << "Error: dimensiones o valor maximo invalidos." << std::endl;
+            return false;
+        }
+
+        const std::size_t pixelCount =
+            static_cast<std::size_t>(width) *
+            static_cast<std::size_t>(height) *
+            static_cast<std::size_t>(channels);
+
+        pixels.resize(pixelCount);
+
+        for (std::size_t i = 0; i < pixelCount; ++i) {
+            if (!readToken(token)) {
+                std::cerr << "Error: no se pudieron leer todos los pixeles." << std::endl;
+                return false;
+            }
+
+            pixels[i] = std::stoi(token);
+
+            if (pixels[i] < 0 || pixels[i] > maxColor) {
+                std::cerr << "Error: valor de pixel fuera de rango." << std::endl;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void write() const {
+        std::cout << magic << '\n';
+        std::cout << width << ' ' << height << '\n';
+        std::cout << maxColor << '\n';
+
+        for (std::size_t i = 0; i < pixels.size(); ++i) {
+            std::cout << pixels[i];
+
+            if ((i + 1) % channels == 0) {
+                std::cout << '\n';
+            } else {
+                std::cout << ' ';
+            }
+        }
+    }
+};
+
+int main() {
+    Image image;
+
+    if (!image.read()) {
+        return 1;
+    }
+
+    image.write();
+
+    return 0;
+
+    
 }
