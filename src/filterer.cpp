@@ -1,101 +1,316 @@
 #include <iostream>
+#include <vector>
+#include <string>
+#include <fstream>
+#include <chrono>
+#include <ctime>
+#include <algorithm>
+#include <omp.h>
 
-#define MAX_FILENAME 256
-#define BUFFER_SIZE 1024
+struct Kernel {
+    int values[3][3];
+    int divisor;
+};
+
+static Kernel makeKernel(const std::string& filter) {
+    if (filter == "blur") {
+        return Kernel{{{1, 1, 1},
+                       {1, 1, 1},
+                       {1, 1, 1}}, 9};
+    }
+
+    if (filter == "laplace") {
+        return Kernel{{{-1, -1, -1},
+                       {-1,  8, -1},
+                       {-1, -1, -1}}, 1};
+    }
+
+    return Kernel{{{ 0, -1,  0},
+                   {-1,  5, -1},
+                   { 0, -1,  0}}, 1};
+}
+
+class Image {
+private:
+    std::string magic;
+    int width;
+    int height;
+    int maxColor;
+    int channels;
+    std::vector<int> pixels;
+
+    void skipComments(std::istream& input) {
+        while (input >> std::ws && input.peek() == '#') {
+            std::string comment;
+            std::getline(input, comment);
+        }
+    }
+
+    bool readToken(std::istream& input, std::string& token) {
+        skipComments(input);
+        return static_cast<bool>(input >> token);
+    }
+
+    void processRow(
+        Image& result,
+        int y,
+        const Kernel& kernel
+    ) const {
+
+        for (int x = 1; x < width - 1; ++x) {
+            for (int channel = 0; channel < channels; ++channel) {
+
+                int sum = 0;
+
+                for (int ky = -1; ky <= 1; ++ky) {
+                    for (int kx = -1; kx <= 1; ++kx) {
+
+                        std::size_t index =
+                            (static_cast<std::size_t>(y + ky) * width +
+                             (x + kx)) * channels + channel;
+
+                        sum += pixels[index] *
+                               kernel.values[ky + 1][kx + 1];
+                    }
+                }
+
+                sum /= kernel.divisor;
+
+                sum = std::max(0, std::min(maxColor, sum));
+
+                std::size_t index =
+                    (static_cast<std::size_t>(y) * width + x) *
+                    channels + channel;
+
+                result.pixels[index] = sum;
+            }
+        }
+    }
+
+public:
+    Image()
+        : width(0), height(0), maxColor(0), channels(0) {}
+
+    bool read(std::istream& input) {
+        std::string token;
+
+        if (!readToken(input, magic)) {
+            return false;
+        }
+
+        if (magic == "P2") {
+            channels = 1;
+        } else if (magic == "P3") {
+            channels = 3;
+        } else {
+            std::cerr
+                << "Error: formato no soportado. Use P2 o P3."
+                << std::endl;
+            return false;
+        }
+
+        if (!readToken(input, token)) {
+            return false;
+        }
+        width = std::stoi(token);
+
+        if (!readToken(input, token)) {
+            return false;
+        }
+        height = std::stoi(token);
+
+        if (!readToken(input, token)) {
+            return false;
+        }
+        maxColor = std::stoi(token);
+
+        if (width <= 0 || height <= 0 || maxColor <= 0) {
+            std::cerr
+                << "Error: dimensiones o valor maximo invalidos."
+                << std::endl;
+            return false;
+        }
+
+        std::size_t pixelCount =
+            static_cast<std::size_t>(width) *
+            static_cast<std::size_t>(height) *
+            static_cast<std::size_t>(channels);
+
+        pixels.resize(pixelCount);
+
+        for (std::size_t i = 0; i < pixelCount; ++i) {
+            if (!readToken(input, token)) {
+                std::cerr
+                    << "Error: no se pudieron leer todos los pixeles."
+                    << std::endl;
+                return false;
+            }
+
+            pixels[i] = std::stoi(token);
+
+            if (pixels[i] < 0 || pixels[i] > maxColor) {
+                std::cerr
+                    << "Error: valor de pixel fuera de rango."
+                    << std::endl;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    void write(std::ostream& output) const {
+        output << magic << '\n';
+        output << width << ' ' << height << '\n';
+        output << maxColor << '\n';
+
+        for (std::size_t i = 0; i < pixels.size(); ++i) {
+            output << pixels[i];
+
+            if ((i + 1) % channels == 0) {
+                output << '\n';
+            } else {
+                output << ' ';
+            }
+        }
+    }
+
+    Image applyFilterOpenMP(const std::string& filter) const {
+        Image result = *this;
+
+        const Kernel kernel = makeKernel(filter);
+
+        #pragma omp parallel for schedule(static) num_threads(4)
+        for (int y = 1; y < height - 1; ++y) {
+            processRow(result, y, kernel);
+        }
+
+        return result;
+    }
+};
 
 int main(int argc, char* argv[]) {
 
-  // Kernel de blur (promedio)
-  const float blur_kernel[3][3] = {
-      {1.0/9, 1.0/9, 1.0/9},
-      {1.0/9, 1.0/9, 1.0/9},
-      {1.0/9, 1.0/9, 1.0/9}
-  };
+    if (argc != 5) {
+        std::cerr
+            << "Uso: " << argv[0]
+            << " input_image output_image --f filtro"
+            << std::endl;
 
-  char buffer[BUFFER_SIZE];
-  char magic[3];
-  int width;
-  int height;
-  int max_color;
-  int *pixels;
-  int* blurred_pixels;
+        std::cerr
+            << "Filtros disponibles: blur, laplace, sharpen"
+            << std::endl;
 
-  if(argc<2){
-    std::cout << "missing input and output paths\n";
-    std::cout << "usage:" << argv[0] << " input_image.pgm output_image.pgm" << std::endl;
-    std::cout << "or "<< argv[0] << "input_image.ppm output_image.ppm" << std::endl;
-    return 1;
-  }
-  // abrir archivo
-  FILE *file = fopen(argv[1], "r");
-  if (file == NULL) {
-    std::cout << "Error, incorrect path or incorrect file."<< std::endl;
-    return 1;
-  }
-  // Leer y mostrar línea por línea
-  fscanf(file, "%2s", magic);  // magic number
-  fscanf(file, "%d %d", &width, &height);
-  fscanf(file, "%d", &max_color);
-
-  int pixel_count = width * height;
-  if (strcmp(magic, "P3") != 0){
-    int pixel_count = width * height * 3;
-  }
-
-  pixels = (int *) malloc(pixel_count);
-  int value;
-
-  for (int i = 0; i < pixel_count; i++) {
-      if (fscanf(file, "%d", &value) != 1) {
-        std::cout << "Error reading pixels."<< std::endl;
-        free(pixels);
-        fclose(file);
-        return 0;
-      }
-      pixels[i] = value;
-  }
-  fclose(file);
-
-  blurred_pixels = (int *) malloc(pixel_count);
-  // Aplicar filtro blur
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      float sum = 0.0;
-      float weight_sum = 0.0;
-
-      // Aplicar kernel 3x3
-      for (int ky = -1; ky <= 1; ky++) {
-        for (int kx = -1; kx <= 1; kx++) {
-          int nx = x + kx;
-          int ny = y + ky;
-          
-          if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-            int idx = (ny * width + nx);
-            sum += pixels[idx] * blur_kernel[ky+1][kx+1];
-            weight_sum += blur_kernel[ky+1][kx+1];
-          }
-        }
-      }
-
-      // Normalizar y asegurar valores dentro del rango
-      int result = static_cast<int>(sum / weight_sum);
-      result = std::max(0, std::min(max_color, result));
-
-      int idx = (y * width + x);
-      blurred_pixels[idx] = result;
+        return 1;
     }
-  }
 
-  FILE * output = fopen(argv[2], "w");
-  (void) fprintf(output, "%s\n%d %d\n%d\n", magic, width, height, max_color);
-  for (int i = 0; i < pixel_count; i++) {
-    fprintf(output, "%d\n", blurred_pixels[i]);
-  }
-  (void) fclose(output);
-  return 0;
+    std::string inputPath = argv[1];
+    std::string outputPath = argv[2];
+    std::string filterOption = argv[3];
+    std::string filter = argv[4];
 
+    if (filterOption != "--f") {
+        std::cerr
+            << "Error: debe utilizar --f para seleccionar el filtro."
+            << std::endl;
 
-  
-  
+        return 1;
+    }
 
+    if (filter != "blur" &&
+        filter != "laplace" &&
+        filter != "sharpen") {
+
+        std::cerr
+            << "Error: filtro no reconocido: "
+            << filter
+            << std::endl;
+
+        std::cerr
+            << "Filtros disponibles: blur, laplace, sharpen"
+            << std::endl;
+
+        return 1;
+    }
+
+    std::ifstream inputFile(inputPath);
+
+    if (!inputFile) {
+        std::cerr
+            << "Error: no se pudo abrir la imagen de entrada: "
+            << inputPath
+            << std::endl;
+
+        return 1;
+    }
+
+    Image image;
+
+    try {
+        if (!image.read(inputFile)) {
+            std::cerr
+                << "Error: no se pudo leer la imagen."
+                << std::endl;
+
+            return 1;
+        }
+    } catch (const std::exception&) {
+        std::cerr
+            << "Error: archivo de imagen con formato invalido."
+            << std::endl;
+
+        return 1;
+    }
+
+    inputFile.close();
+
+    std::clock_t cpuStart = std::clock();
+    auto wallStart = std::chrono::steady_clock::now();
+
+    Image result = image.applyFilterOpenMP(filter);
+
+    auto wallEnd = std::chrono::steady_clock::now();
+    std::clock_t cpuEnd = std::clock();
+
+    std::ofstream outputFile(outputPath);
+
+    if (!outputFile) {
+        std::cerr
+            << "Error: no se pudo crear la imagen de salida: "
+            << outputPath
+            << std::endl;
+
+        return 1;
+    }
+
+    result.write(outputFile);
+    outputFile.close();
+
+    double cpuTime =
+        static_cast<double>(cpuEnd - cpuStart) /
+        CLOCKS_PER_SEC;
+
+    double totalTime =
+        std::chrono::duration<double>(
+            wallEnd - wallStart
+        ).count();
+
+    std::cerr
+        << "Filtro: "
+        << filter
+        << std::endl;
+
+    std::cerr
+        << "Tiempo CPU: "
+        << cpuTime
+        << " segundos"
+        << std::endl;
+
+    std::cerr
+        << "Tiempo total de filtrado: "
+        << totalTime
+        << " segundos"
+        << std::endl;
+
+    return 0;
 }

@@ -5,6 +5,31 @@
 #include <chrono>
 #include <ctime>
 #include <algorithm>
+#include <thread>
+#include <functional>
+
+struct Kernel {
+    int values[3][3];
+    int divisor;
+};
+
+static Kernel makeKernel(const std::string& filter) {
+    if (filter == "blur") {
+        return Kernel{{{1, 1, 1},
+                       {1, 1, 1},
+                       {1, 1, 1}}, 9};
+    }
+
+    if (filter == "laplace") {
+        return Kernel{{{-1, -1, -1},
+                       {-1,  8, -1},
+                       {-1, -1, -1}}, 1};
+    }
+
+    return Kernel{{{ 0, -1,  0},
+                   {-1,  5, -1},
+                   { 0, -1,  0}}, 1};
+}
 
 class Image {
 private:
@@ -24,21 +49,52 @@ private:
 
     bool readToken(std::istream& input, std::string& token) {
         skipComments(input);
+        return static_cast<bool>(input >> token);
+    }
 
-        if (!(input >> token)) {
-            return false;
+    void processRegion(
+        Image& result,
+        int yStart,
+        int yEnd,
+        int xStart,
+        int xEnd,
+        const Kernel& kernel
+    ) const {
+        for (int y = yStart; y < yEnd; ++y) {
+            for (int x = xStart; x < xEnd; ++x) {
+                for (int channel = 0; channel < channels; ++channel) {
+
+                    int sum = 0;
+
+                    for (int ky = -1; ky <= 1; ++ky) {
+                        for (int kx = -1; kx <= 1; ++kx) {
+
+                            std::size_t index =
+                                (static_cast<std::size_t>(y + ky) * width +
+                                 (x + kx)) * channels + channel;
+
+                            sum += pixels[index] *
+                                   kernel.values[ky + 1][kx + 1];
+                        }
+                    }
+
+                    sum /= kernel.divisor;
+
+                    sum = std::max(0, std::min(maxColor, sum));
+
+                    std::size_t index =
+                        (static_cast<std::size_t>(y) * width + x) *
+                        channels + channel;
+
+                    result.pixels[index] = sum;
+                }
+            }
         }
-
-        return true;
     }
 
 public:
     Image()
-        : width(0),
-          height(0),
-          maxColor(0),
-          channels(0) {
-    }
+        : width(0), height(0), maxColor(0), channels(0) {}
 
     bool read(std::istream& input) {
         std::string token;
@@ -124,131 +180,62 @@ public:
         }
     }
 
-    Image applyBlur() const {
+    Image applyFilterParallel(const std::string& filter) const {
         Image result = *this;
 
-        for (int y = 1; y < height - 1; ++y) {
-            for (int x = 1; x < width - 1; ++x) {
-                for (int channel = 0; channel < channels; ++channel) {
+        const Kernel kernel = makeKernel(filter);
 
-                    int sum = 0;
+        int middleX = width / 2;
+        int middleY = height / 2;
 
-                    for (int ky = -1; ky <= 1; ++ky) {
-                        for (int kx = -1; kx <= 1; ++kx) {
+        std::thread topLeft(
+            &Image::processRegion,
+            this,
+            std::ref(result),
+            1,
+            middleY,
+            1,
+            middleX,
+            std::cref(kernel)
+        );
 
-                            std::size_t index =
-                                (static_cast<std::size_t>(y + ky) * width +
-                                 (x + kx)) *
-                                channels +
-                                channel;
+        std::thread topRight(
+            &Image::processRegion,
+            this,
+            std::ref(result),
+            1,
+            middleY,
+            middleX,
+            width - 1,
+            std::cref(kernel)
+        );
 
-                            sum += pixels[index];
-                        }
-                    }
+        std::thread bottomLeft(
+            &Image::processRegion,
+            this,
+            std::ref(result),
+            middleY,
+            height - 1,
+            1,
+            middleX,
+            std::cref(kernel)
+        );
 
-                    int value = sum / 9;
+        std::thread bottomRight(
+            &Image::processRegion,
+            this,
+            std::ref(result),
+            middleY,
+            height - 1,
+            middleX,
+            width - 1,
+            std::cref(kernel)
+        );
 
-                    value = std::max(0, std::min(maxColor, value));
-
-                    std::size_t index =
-                        (static_cast<std::size_t>(y) * width + x) *
-                        channels +
-                        channel;
-
-                    result.pixels[index] = value;
-                }
-            }
-        }
-
-        return result;
-    }
-
-    Image applyLaplace() const {
-        Image result = *this;
-
-        const int kernel[3][3] = {
-            {-1, -1, -1},
-            {-1,  8, -1},
-            {-1, -1, -1}
-        };
-
-        for (int y = 1; y < height - 1; ++y) {
-            for (int x = 1; x < width - 1; ++x) {
-                for (int channel = 0; channel < channels; ++channel) {
-
-                    int sum = 0;
-
-                    for (int ky = -1; ky <= 1; ++ky) {
-                        for (int kx = -1; kx <= 1; ++kx) {
-
-                            std::size_t index =
-                                (static_cast<std::size_t>(y + ky) * width +
-                                 (x + kx)) *
-                                channels +
-                                channel;
-
-                            sum +=
-                                pixels[index] *
-                                kernel[ky + 1][kx + 1];
-                        }
-                    }
-
-                    sum = std::max(0, std::min(maxColor, sum));
-
-                    std::size_t index =
-                        (static_cast<std::size_t>(y) * width + x) *
-                        channels +
-                        channel;
-
-                    result.pixels[index] = sum;
-                }
-            }
-        }
-
-        return result;
-    }
-
-    Image applySharpen() const {
-        Image result = *this;
-
-        const int kernel[3][3] = {
-            { 0, -1,  0},
-            {-1,  5, -1},
-            { 0, -1,  0}
-        };
-
-        for (int y = 1; y < height - 1; ++y) {
-            for (int x = 1; x < width - 1; ++x) {
-                for (int channel = 0; channel < channels; ++channel) {
-
-                    int sum = 0;
-
-                    for (int ky = -1; ky <= 1; ++ky) {
-                        for (int kx = -1; kx <= 1; ++kx) {
-
-                            std::size_t index =
-                                (static_cast<std::size_t>(y + ky) * width +
-                                 (x + kx)) *
-                                channels +
-                                channel;
-
-                            sum +=
-                                pixels[index] *
-                                kernel[ky + 1][kx + 1];
-                        }
-                    }
-
-                    sum = std::max(0, std::min(maxColor, sum));
-
-                    std::size_t index =
-                        (static_cast<std::size_t>(y) * width + x) *
-                        channels +
-                        channel;
-
-                    result.pixels[index] = sum;
-                }
-            }
-        }
+        topLeft.join();
+        topRight.join();
+        bottomLeft.join();
+        bottomRight.join();
 
         return result;
     }
@@ -311,9 +298,17 @@ int main(int argc, char* argv[]) {
 
     Image image;
 
-    if (!image.read(inputFile)) {
+    try {
+        if (!image.read(inputFile)) {
+            std::cerr
+                << "Error: no se pudo leer la imagen."
+                << std::endl;
+
+            return 1;
+        }
+    } catch (const std::exception&) {
         std::cerr
-            << "Error: no se pudo leer la imagen."
+            << "Error: archivo de imagen con formato invalido."
             << std::endl;
 
         return 1;
@@ -321,18 +316,10 @@ int main(int argc, char* argv[]) {
 
     inputFile.close();
 
-    Image result;
-
     std::clock_t cpuStart = std::clock();
     auto wallStart = std::chrono::steady_clock::now();
 
-    if (filter == "blur") {
-        result = image.applyBlur();
-    } else if (filter == "laplace") {
-        result = image.applyLaplace();
-    } else if (filter == "sharpen") {
-        result = image.applySharpen();
-    }
+    Image result = image.applyFilterParallel(filter);
 
     auto wallEnd = std::chrono::steady_clock::now();
     std::clock_t cpuEnd = std::clock();
@@ -349,7 +336,6 @@ int main(int argc, char* argv[]) {
     }
 
     result.write(outputFile);
-
     outputFile.close();
 
     double cpuTime =
@@ -362,7 +348,8 @@ int main(int argc, char* argv[]) {
         ).count();
 
     std::cerr
-        << "Filtro: " << filter
+        << "Filtro: "
+        << filter
         << std::endl;
 
     std::cerr
