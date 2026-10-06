@@ -1,0 +1,52 @@
+services:
+  mpi-master:
+    image: netpbm-mpi
+    hostname: mpi-master
+    volumes:
+      - ./images:/app/images
+    networks:
+      - mpi-network
+    command:
+      - sleep
+      - infinity
+    depends_on:
+      - mpi-worker1
+      - mpi-worker2
+      - mpi-worker3
+
+  mpi-worker1:
+    image: netpbm-mpi
+    hostname: mpi-worker1
+    volumes:
+      - ./images:/app/images
+    networks:
+      - mpi-network
+    command:
+      - sleep
+      - infinity
+
+  mpi-worker2:
+    image: netpbm-mpi
+    hostname: mpi-worker2
+    volumes:
+      - ./images:/app/images
+    networks:
+      - mpi-network
+    command:
+      - sleep
+      - infinity
+
+  mpi-worker3:
+    image: netpbm-mpi
+    hostname: mpi-worker3
+    volumes:
+      - ./images:/app/images
+    networks:
+      - mpi-network
+    command:
+      - sleep
+      - infinity
+
+networks:
+  mpi-network:
+    driver: bridge
