@@ -1,6 +1,10 @@
 #include <iostream>
 #include <vector>
 #include <string>
+#include <fstream>
+#include <chrono>
+#include <ctime>
+#include <algorithm>
 
 class Image {
 private:
@@ -11,19 +15,17 @@ private:
     int channels;
     std::vector<int> pixels;
 
-    void skipComments() {
-        char c;
-
-        while (std::cin >> std::ws && std::cin.peek() == '#') {
+    void skipComments(std::istream& input) {
+        while (input >> std::ws && input.peek() == '#') {
             std::string comment;
-            std::getline(std::cin, comment);
+            std::getline(input, comment);
         }
     }
 
-    bool readToken(std::string& token) {
-        skipComments();
+    bool readToken(std::istream& input, std::string& token) {
+        skipComments(input);
 
-        if (!(std::cin >> token)) {
+        if (!(input >> token)) {
             return false;
         }
 
@@ -38,10 +40,10 @@ public:
           channels(0) {
     }
 
-    bool read() {
+    bool read(std::istream& input) {
         std::string token;
 
-        if (!readToken(magic)) {
+        if (!readToken(input, magic)) {
             return false;
         }
 
@@ -50,31 +52,35 @@ public:
         } else if (magic == "P3") {
             channels = 3;
         } else {
-            std::cerr << "Error: formato no soportado. Use P2 o P3." << std::endl;
+            std::cerr
+                << "Error: formato no soportado. Use P2 o P3."
+                << std::endl;
             return false;
         }
 
-        if (!readToken(token)) {
+        if (!readToken(input, token)) {
             return false;
         }
         width = std::stoi(token);
 
-        if (!readToken(token)) {
+        if (!readToken(input, token)) {
             return false;
         }
         height = std::stoi(token);
 
-        if (!readToken(token)) {
+        if (!readToken(input, token)) {
             return false;
         }
         maxColor = std::stoi(token);
 
         if (width <= 0 || height <= 0 || maxColor <= 0) {
-            std::cerr << "Error: dimensiones o valor maximo invalidos." << std::endl;
+            std::cerr
+                << "Error: dimensiones o valor maximo invalidos."
+                << std::endl;
             return false;
         }
 
-        const std::size_t pixelCount =
+        std::size_t pixelCount =
             static_cast<std::size_t>(width) *
             static_cast<std::size_t>(height) *
             static_cast<std::size_t>(channels);
@@ -82,15 +88,19 @@ public:
         pixels.resize(pixelCount);
 
         for (std::size_t i = 0; i < pixelCount; ++i) {
-            if (!readToken(token)) {
-                std::cerr << "Error: no se pudieron leer todos los pixeles." << std::endl;
+            if (!readToken(input, token)) {
+                std::cerr
+                    << "Error: no se pudieron leer todos los pixeles."
+                    << std::endl;
                 return false;
             }
 
             pixels[i] = std::stoi(token);
 
             if (pixels[i] < 0 || pixels[i] > maxColor) {
-                std::cerr << "Error: valor de pixel fuera de rango." << std::endl;
+                std::cerr
+                    << "Error: valor de pixel fuera de rango."
+                    << std::endl;
                 return false;
             }
         }
@@ -98,33 +108,274 @@ public:
         return true;
     }
 
-    void write() const {
-        std::cout << magic << '\n';
-        std::cout << width << ' ' << height << '\n';
-        std::cout << maxColor << '\n';
+    void write(std::ostream& output) const {
+        output << magic << '\n';
+        output << width << ' ' << height << '\n';
+        output << maxColor << '\n';
 
         for (std::size_t i = 0; i < pixels.size(); ++i) {
-            std::cout << pixels[i];
+            output << pixels[i];
 
             if ((i + 1) % channels == 0) {
-                std::cout << '\n';
+                output << '\n';
             } else {
-                std::cout << ' ';
+                output << ' ';
             }
         }
     }
+
+    Image applyBlur() const {
+        Image result = *this;
+
+        for (int y = 1; y < height - 1; ++y) {
+            for (int x = 1; x < width - 1; ++x) {
+                for (int channel = 0; channel < channels; ++channel) {
+
+                    int sum = 0;
+
+                    for (int ky = -1; ky <= 1; ++ky) {
+                        for (int kx = -1; kx <= 1; ++kx) {
+
+                            std::size_t index =
+                                (static_cast<std::size_t>(y + ky) * width +
+                                 (x + kx)) *
+                                channels +
+                                channel;
+
+                            sum += pixels[index];
+                        }
+                    }
+
+                    int value = sum / 9;
+
+                    value = std::max(0, std::min(maxColor, value));
+
+                    std::size_t index =
+                        (static_cast<std::size_t>(y) * width + x) *
+                        channels +
+                        channel;
+
+                    result.pixels[index] = value;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    Image applyLaplace() const {
+        Image result = *this;
+
+        const int kernel[3][3] = {
+            {-1, -1, -1},
+            {-1,  8, -1},
+            {-1, -1, -1}
+        };
+
+        for (int y = 1; y < height - 1; ++y) {
+            for (int x = 1; x < width - 1; ++x) {
+                for (int channel = 0; channel < channels; ++channel) {
+
+                    int sum = 0;
+
+                    for (int ky = -1; ky <= 1; ++ky) {
+                        for (int kx = -1; kx <= 1; ++kx) {
+
+                            std::size_t index =
+                                (static_cast<std::size_t>(y + ky) * width +
+                                 (x + kx)) *
+                                channels +
+                                channel;
+
+                            sum +=
+                                pixels[index] *
+                                kernel[ky + 1][kx + 1];
+                        }
+                    }
+
+                    sum = std::max(0, std::min(maxColor, sum));
+
+                    std::size_t index =
+                        (static_cast<std::size_t>(y) * width + x) *
+                        channels +
+                        channel;
+
+                    result.pixels[index] = sum;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    Image applySharpen() const {
+        Image result = *this;
+
+        const int kernel[3][3] = {
+            { 0, -1,  0},
+            {-1,  5, -1},
+            { 0, -1,  0}
+        };
+
+        for (int y = 1; y < height - 1; ++y) {
+            for (int x = 1; x < width - 1; ++x) {
+                for (int channel = 0; channel < channels; ++channel) {
+
+                    int sum = 0;
+
+                    for (int ky = -1; ky <= 1; ++ky) {
+                        for (int kx = -1; kx <= 1; ++kx) {
+
+                            std::size_t index =
+                                (static_cast<std::size_t>(y + ky) * width +
+                                 (x + kx)) *
+                                channels +
+                                channel;
+
+                            sum +=
+                                pixels[index] *
+                                kernel[ky + 1][kx + 1];
+                        }
+                    }
+
+                    sum = std::max(0, std::min(maxColor, sum));
+
+                    std::size_t index =
+                        (static_cast<std::size_t>(y) * width + x) *
+                        channels +
+                        channel;
+
+                    result.pixels[index] = sum;
+                }
+            }
+        }
+
+        return result;
+    }
 };
 
-int main() {
-    Image image;
+int main(int argc, char* argv[]) {
 
-    if (!image.read()) {
+    if (argc != 5) {
+        std::cerr
+            << "Uso: " << argv[0]
+            << " input_image output_image --f filtro"
+            << std::endl;
+
+        std::cerr
+            << "Filtros disponibles: blur, laplace, sharpen"
+            << std::endl;
+
         return 1;
     }
 
-    image.write();
+    std::string inputPath = argv[1];
+    std::string outputPath = argv[2];
+    std::string filterOption = argv[3];
+    std::string filter = argv[4];
+
+    if (filterOption != "--f") {
+        std::cerr
+            << "Error: debe utilizar --f para seleccionar el filtro."
+            << std::endl;
+
+        return 1;
+    }
+
+    if (filter != "blur" &&
+        filter != "laplace" &&
+        filter != "sharpen") {
+
+        std::cerr
+            << "Error: filtro no reconocido: "
+            << filter
+            << std::endl;
+
+        std::cerr
+            << "Filtros disponibles: blur, laplace, sharpen"
+            << std::endl;
+
+        return 1;
+    }
+
+    std::ifstream inputFile(inputPath);
+
+    if (!inputFile) {
+        std::cerr
+            << "Error: no se pudo abrir la imagen de entrada: "
+            << inputPath
+            << std::endl;
+
+        return 1;
+    }
+
+    Image image;
+
+    if (!image.read(inputFile)) {
+        std::cerr
+            << "Error: no se pudo leer la imagen."
+            << std::endl;
+
+        return 1;
+    }
+
+    inputFile.close();
+
+    Image result;
+
+    std::clock_t cpuStart = std::clock();
+    auto wallStart = std::chrono::steady_clock::now();
+
+    if (filter == "blur") {
+        result = image.applyBlur();
+    } else if (filter == "laplace") {
+        result = image.applyLaplace();
+    } else if (filter == "sharpen") {
+        result = image.applySharpen();
+    }
+
+    auto wallEnd = std::chrono::steady_clock::now();
+    std::clock_t cpuEnd = std::clock();
+
+    std::ofstream outputFile(outputPath);
+
+    if (!outputFile) {
+        std::cerr
+            << "Error: no se pudo crear la imagen de salida: "
+            << outputPath
+            << std::endl;
+
+        return 1;
+    }
+
+    result.write(outputFile);
+
+    outputFile.close();
+
+    double cpuTime =
+        static_cast<double>(cpuEnd - cpuStart) /
+        CLOCKS_PER_SEC;
+
+    double totalTime =
+        std::chrono::duration<double>(
+            wallEnd - wallStart
+        ).count();
+
+    std::cerr
+        << "Filtro: " << filter
+        << std::endl;
+
+    std::cerr
+        << "Tiempo CPU: "
+        << cpuTime
+        << " segundos"
+        << std::endl;
+
+    std::cerr
+        << "Tiempo total de filtrado: "
+        << totalTime
+        << " segundos"
+        << std::endl;
 
     return 0;
-
-    
 }
